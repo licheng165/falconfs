@@ -903,6 +903,68 @@ static PyObject* PyWrapper_AsyncPut(PyObject* self, PyObject* args)
     return (PyObject*)state;
 }
 
+static PyObject* PyWrapper_AsyncBatchExists(PyObject* self, PyObject* args)
+{
+    PyObject* pathList = nullptr;
+    if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pathList))
+        return nullptr;
+
+    Py_ssize_t pathCount = PyList_Size(pathList);
+    std::vector<std::string> paths(pathCount);
+    for (Py_ssize_t i = 0; i < pathCount; ++i)
+    {
+        PyObject* item = PyList_GetItem(pathList, i);
+        if (!PyUnicode_Check(item))
+        {
+            PyErr_SetString(PyExc_TypeError, "all items in path list must be strings");
+            return nullptr;
+        }
+        paths[i] = PyUnicode_AsUTF8(item);
+    }
+
+    AsyncState* state = (AsyncState*)AsyncStateType.tp_new(&AsyncStateType, nullptr, nullptr);
+    auto task = [paths = std::move(paths)]() -> std::unique_ptr<AsyncResultBase>
+    {
+        constexpr size_t kChunkSize = 8;
+        size_t count = 0;
+        size_t total = paths.size();
+        try
+        {
+            while (count < total)
+            {
+                size_t chunkEnd = std::min(count + kChunkSize, total);
+                size_t chunkLen = chunkEnd - count;
+                std::vector<std::future<std::pair<int, size_t>>> futures;
+                futures.reserve(chunkLen);
+                for (size_t i = 0; i < chunkLen; ++i)
+                {
+                    futures.push_back(std::async(std::launch::async, [&paths, count, i]() -> std::pair<int, size_t> {
+                        struct stat stbuf;
+                        return {Stat(paths[count + i].c_str(), &stbuf), i};
+                    }));
+                }
+                size_t firstFailIdx = chunkLen;
+                for (size_t i = 0; i < chunkLen; ++i)
+                {
+                    auto [ret, idx] = futures[i].get();
+                    if (ret != 0 && idx < firstFailIdx)
+                        firstFailIdx = idx;
+                }
+                count += firstFailIdx;
+                if (firstFailIdx < chunkLen)
+                    break;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            return std::make_unique<AsyncResultBase>(strdup(e.what()));
+        }
+        return std::make_unique<AsyncResultIntOnly>(static_cast<int>(count));
+    };
+    state->future = AsyncTaskThreadPoolForPy->Dispatch(task);
+    return (PyObject*)state;
+}
+
 static PyMethodDef PyFalconFSInternalMethods[] = 
 {
     {
@@ -1100,6 +1162,16 @@ static PyMethodDef PyFalconFSInternalMethods[] =
         "  offset (int): Write offset\n"
         "Returns:\n"
         "  write size (int): write byte size"
+    },
+    {
+        "AsyncBatchExists", 
+        PyWrapper_AsyncBatchExists, 
+        METH_VARARGS, 
+        "Check consecutive file/directory existence from the start of a path list\n"
+        "Parameters:\n"
+        "  paths (list[str]): List of file/directory paths, each must start with '/'\n"
+        "Returns:\n"
+        "  count (int): Number of consecutive existing paths from the beginning of the list"
     },
     {
         NULL, 

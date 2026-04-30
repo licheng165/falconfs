@@ -80,6 +80,10 @@ class AsyncConnector:
     async def AsyncExists(self, path):
         return await _pyfalconfs_internal.AsyncExists(path)
     
+    @copy_doc_from(_pyfalconfs_internal.AsyncBatchExists)
+    async def AsyncBatchExists(self, paths):
+        return await _pyfalconfs_internal.AsyncBatchExists(paths)
+    
     @copy_doc_from(_pyfalconfs_internal.AsyncGet)
     async def AsyncGet(self, path, buffer, size, offset):
         return await _pyfalconfs_internal.AsyncGet(path, buffer, size, offset)
