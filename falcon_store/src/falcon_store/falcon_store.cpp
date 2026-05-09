@@ -8,6 +8,7 @@
 #include "connection/node.h"
 #include "disk_cache/disk_cache.h"
 #include "falcon_code.h"
+#include "falcon_store/io_uring_manager.h"
 #include "init/falcon_init.h"
 #include "stats/falcon_stats.h"
 #include "storage/obs_storage.h"
@@ -109,7 +110,21 @@ int FalconStore::InitStore()
     }
 #endif
 
+    // Initialize io_uring manager
+    ret = InitIoUring();
+    if (ret != 0) {
+        FALCON_LOG(LOG_WARNING) << "Failed to initialize io_uring, falling back to pread/pwrite: " << strerror(-ret);
+    }
+
     return 0;
+}
+
+int FalconStore::InitIoUring(int queueDepth) {
+    return IoUringManager::GetInstance().Init(queueDepth);
+}
+
+void FalconStore::DestroyIoUring() {
+    IoUringManager::GetInstance().Destroy();
 }
 
 std::string GetParentPath(const std::string &path, int level)
@@ -471,21 +486,38 @@ ssize_t FalconStore::ReadFileLR(char *readBuffer, off_t offset, OpenInstance *op
         if (openInstance->physicalFd != UINT64_MAX && !fileLock.TestLocked(openInstance->inodeId, LockMode::X)) {
             /* not locked, read cache file */
             FalconStats::GetInstance().stats[BLOCKCACHE_READ] += checkReadLength;
-            retSize = pread(openInstance->physicalFd, readBuffer, readBufferSize, offset);
-            if (retSize != checkReadLength) {
-                int err = errno;
-                if (err == EAGAIN) {
-                    retSize = pread(openInstance->physicalFd, readBuffer, checkReadLength, offset);
-                    if (retSize != checkReadLength) {
-                        err = errno;
-                        FALCON_LOG(LOG_ERROR) << "In ReadFileLR(): pread fd = " << openInstance->physicalFd
-                                              << " failed : " << strerror(err);
+            
+            // Use io_uring if available, otherwise fallback to pread
+            if (IoUringManager::GetInstance().IsInitialized()) {
+                auto future = IoUringManager::GetInstance().SubmitRead(
+                    openInstance->physicalFd, readBuffer, readBufferSize, offset);
+                retSize = future.get();
+                if (retSize < 0) {
+                    int err = -retSize;
+                    FALCON_LOG(LOG_ERROR) << "In ReadFileLR(): io_uring read fd = " 
+                                          << openInstance->physicalFd << " failed: " << strerror(err);
+                    retSize = -err;
+                } else if (retSize != checkReadLength) {
+                    // Partial read or EOF, keep retSize as is
+                }
+            } else {
+                // Fallback to pread
+                retSize = pread(openInstance->physicalFd, readBuffer, readBufferSize, offset);
+                if (retSize != checkReadLength) {
+                    int err = errno;
+                    if (err == EAGAIN) {
+                        retSize = pread(openInstance->physicalFd, readBuffer, checkReadLength, offset);
+                        if (retSize != checkReadLength) {
+                            err = errno;
+                            FALCON_LOG(LOG_ERROR) << "In ReadFileLR(): pread fd = " << openInstance->physicalFd
+                                                  << " failed : " << strerror(err);
+                            retSize = -err;
+                        }
+                    } else {
+                        FALCON_LOG(LOG_ERROR)
+                            << "In ReadFileLR(): pread fd = " << openInstance->physicalFd << " failed : " << strerror(err);
                         retSize = -err;
                     }
-                } else {
-                    FALCON_LOG(LOG_ERROR)
-                        << "In ReadFileLR(): pread fd = " << openInstance->physicalFd << " failed : " << strerror(err);
-                    retSize = -err;
                 }
             }
         }

@@ -1,6 +1,10 @@
 # ==================== FalconStore =================
 file(GLOB_RECURSE store_src "${PROJECT_SOURCE_DIR}/falcon_store/src/*.cpp" "${PROJECT_SOURCE_DIR}/falcon_store/src/*.c")
 
+# Find liburing
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBURING REQUIRED liburing)
+
 add_library(FalconStore STATIC
     ${common_src}
     ${store_src}
@@ -17,6 +21,7 @@ target_include_directories(FalconStore PUBLIC
     ${COMMON_SRC_PATH}/include/
     ${POSTGRES_INCLUDE_DIR}
     ${PROJECT_SOURCE_DIR}/falcon_client/src/include/
+    ${LIBURING_INCLUDE_DIRS}
 )
 
 target_link_libraries(FalconStore PUBLIC
@@ -25,6 +30,7 @@ target_link_libraries(FalconStore PUBLIC
     ${DYNAMIC_LIB}
     fmt
     jsoncpp
+    ${LIBURING_LIBRARIES}
 )
 
 set(OBS_LIB_DIR "/usr/local/obs/lib/")

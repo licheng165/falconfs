@@ -15,6 +15,7 @@
 #include "error_code.h"
 #include "falcon_code.h"
 #include "falcon_meta.h"
+#include "falcon_store/falcon_store.h"
 #include "init/falcon_init.h"
 #include "log/logging.h"
 #include "stats/falcon_stats.h"
@@ -1128,6 +1129,13 @@ extern "C" PyMODINIT_FUNC PyInit__pyfalconfs_internal(void)
         if (!AsyncTaskThreadPoolForPy)
             AsyncTaskThreadPoolForPy = std::make_shared<AsyncTaskThreadPool>(8);
     }
+    
+    // Initialize io_uring manager
+    int ret = FalconStore::GetInstance()->InitIoUring();
+    if (ret != 0) {
+        FALCON_LOG(LOG_WARNING) << "Failed to initialize io_uring in Python module, falling back to pread/pwrite";
+    }
+    
     PyObject* module = PyModule_Create(&PyFalconFSInternalModule);
     if (PyType_Ready(&AsyncStateType) < 0) 
         return nullptr;

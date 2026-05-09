@@ -5,6 +5,7 @@
 #include "write_stream/stream_assembler.h"
 
 #include "disk_cache/disk_cache.h"
+#include "falcon_store/io_uring_manager.h"
 #include "stats/falcon_stats.h"
 
 MemPool FixMemory::writeMemPool(FALCON_STORE_STREAM_MAX_SIZE, 500);
@@ -98,13 +99,29 @@ int WriteStream::PersistToFile(const char *buf, size_t size, off_t offset, uint6
             return -ENOSPC;
         }
         FalconStats::GetInstance().stats[BLOCKCACHE_WRITE] += size;
-        retSize = pwrite(physicalFd, buf, size, offset);
-        if (retSize < 0) {
-            int err = errno;
-            FALCON_LOG(LOG_ERROR) << "In WriteStream::persistToFile(): pwrite failed" << strerror(err);
-            DiskCache::GetInstance().FreePreAllocSpace(sizeToAdd);
-            return -err;
+        
+        // Use io_uring if available, otherwise fallback to pwrite
+        if (IoUringManager::GetInstance().IsInitialized()) {
+            auto future = IoUringManager::GetInstance().SubmitWrite(
+                physicalFd, buf, size, offset);
+            retSize = future.get();
+            if (retSize < 0) {
+                int err = -retSize;
+                FALCON_LOG(LOG_ERROR) << "In WriteStream::persistToFile(): io_uring write failed: " << strerror(err);
+                DiskCache::GetInstance().FreePreAllocSpace(sizeToAdd);
+                return -err;
+            }
+        } else {
+            // Fallback to pwrite
+            retSize = pwrite(physicalFd, buf, size, offset);
+            if (retSize < 0) {
+                int err = errno;
+                FALCON_LOG(LOG_ERROR) << "In WriteStream::persistToFile(): pwrite failed" << strerror(err);
+                DiskCache::GetInstance().FreePreAllocSpace(sizeToAdd);
+                return -err;
+            }
         }
+        
         if (!DiskCache::GetInstance().Add(inodeId, sizeToAdd)) {
             DiskCache::GetInstance().FreePreAllocSpace(sizeToAdd);
             FALCON_LOG(LOG_ERROR) << "WriteStream::persistToFile(): DiskCache Add failed!";

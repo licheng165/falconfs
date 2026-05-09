@@ -58,6 +58,8 @@ class FalconStore {
     /*-----------------util-----------------*/
     int GetInitStatus();
     int InitStore();
+    int InitIoUring(int queueDepth = 256);
+    void DestroyIoUring();
 
   private:
     /*-----------------read-----------------*/
