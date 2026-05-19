@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <thread>
+
 #include "conf/falcon_config.h"
 
 class FalconModuleInit {
@@ -26,10 +28,17 @@ class FalconModuleInit {
     int32_t InitLog();
     std::shared_ptr<FalconConfig> &GetFalconConfig();
 
+    static void SetIsFuseProcess();
+    static bool IsFuseProcess();
+
   protected:
     std::shared_ptr<FalconConfig> falconConfig;
     std::string configDir;
     bool inited = false;
+    std::jthread reportingThread;
+
+  private:
+    static bool fuseProcess;
 };
 
 FalconModuleInit &GetInit();

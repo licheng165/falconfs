@@ -8,10 +8,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <mutex>
+#include <optional>
+#include <random>
 #include <stop_token>
 #include <numeric>
 #include <iostream>
 #include <vector>
+#include <unordered_set>
 
 enum {
     FUSE_OPS = 0,
@@ -73,6 +77,56 @@ inline bool getStatMax()
     return g_statMax;
 }
 
+enum IOStatsType {
+    IO_READ = 0,
+    IO_WRITE,
+};
+
+struct IORecord {
+    size_t recordId;
+    size_t ioBytes;
+    size_t startTimeNs;
+    size_t endTimeNs;
+};
+
+struct IORecordForReport {
+    int pid;
+    size_t recordId;
+    int ioType;
+    size_t ioBytes;
+    size_t startTimeNs;
+    size_t endTimeNs;
+    bool isInflight;
+};
+
+class FalconStats;
+
+class IOStatDuration {
+  public:
+    IOStatDuration() : durationType(IO_READ), recordId(0), startTimeNs(0), stats(nullptr), finished(false) {}
+    ~IOStatDuration();
+
+    bool isValid() const { return stats != nullptr; }
+    size_t getRecordId() const { return recordId; }
+    size_t getStartTime() const { return startTimeNs; }
+    bool isRead() const { return durationType == IO_READ; }
+    IOStatsType getType() const { return durationType; }
+
+    void setDurationType(IOStatsType type) { durationType = type; }
+    void setRecordId(size_t id) { recordId = id; }
+    void setStartTimeNs(size_t time) { startTimeNs = time; }
+    void setStats(FalconStats *s) { stats = s; }
+    void markFinished() { finished = true; }
+    bool isFinished() const { return finished; }
+
+  private:
+    IOStatsType durationType;
+    size_t recordId;
+    size_t startTimeNs;
+    FalconStats *stats;
+    bool finished;
+};
+
 class FalconStats {
   public:
     static FalconStats &GetInstance()
@@ -85,10 +139,32 @@ class FalconStats {
         for (auto &s : stats) {
             s.store(0);
         }
+        std::random_device rd;
+        nextRecordId.store(static_cast<size_t>(rd()), std::memory_order_relaxed);
     }
     void storeStatforGet(std::stop_token stoken);
     std::atomic<size_t> stats[STATS_END];
     std::atomic<size_t> storedStats[STATS_END];
+
+    void startIO(IOStatDuration &duration, IOStatsType type);
+    void finishIO(IOStatDuration &duration, bool success, size_t ioBytes);
+    void cancelIO(IOStatDuration &duration);
+
+    std::vector<IORecordForReport> getRecordsForReport(int pid);
+    void cleanupReportedRecords(const std::vector<IORecordForReport> &reportedRecords);
+
+    void setIOStatsEnabled(bool enabled) { ioStatsReportToFuseEnabled.store(enabled, std::memory_order_release); }
+    bool isIOStatsEnabled() const { return ioStatsReportToFuseEnabled.load(std::memory_order_acquire); }
+
+  private:
+    static constexpr size_t MAX_IO_RECORDS = 1280000;
+
+    std::mutex recordsMutex;
+    std::atomic<size_t> nextRecordId;
+    std::unordered_set<IOStatDuration *> inflightDurations;
+    std::vector<IORecord> readRecords;
+    std::vector<IORecord> writeRecords;
+    std::atomic<bool> ioStatsReportToFuseEnabled{true};
 };
 
 class StatFuseTimer {

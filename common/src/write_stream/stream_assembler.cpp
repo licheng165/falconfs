@@ -98,7 +98,10 @@ int WriteStream::PersistToFile(const char *buf, size_t size, off_t offset, uint6
             return -ENOSPC;
         }
         FalconStats::GetInstance().stats[BLOCKCACHE_WRITE] += size;
+        IOStatDuration duration;
+        FalconStats::GetInstance().startIO(duration, IOStatsType::IO_WRITE);
         retSize = pwrite(physicalFd, buf, size, offset);
+        FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
         if (retSize < 0) {
             int err = errno;
             FALCON_LOG(LOG_ERROR) << "In WriteStream::persistToFile(): pwrite failed" << strerror(err);

@@ -244,7 +244,10 @@ int FalconStore::WriteLocalFileForBrpc(OpenInstance *openInstance, butil::IOBuf 
             free(alignedBuf);
             return -EIO;
         }
+        IOStatDuration duration;
+        FalconStats::GetInstance().startIO(duration, IOStatsType::IO_WRITE);
         ssize_t retSize = pwrite(openInstance->physicalFd, alignedBuf, writeSize, offset);
+        FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
         free(alignedBuf);
         if (retSize < 0) {
             int err = errno;
@@ -471,11 +474,17 @@ ssize_t FalconStore::ReadFileLR(char *readBuffer, off_t offset, OpenInstance *op
         if (openInstance->physicalFd != UINT64_MAX && !fileLock.TestLocked(openInstance->inodeId, LockMode::X)) {
             /* not locked, read cache file */
             FalconStats::GetInstance().stats[BLOCKCACHE_READ] += checkReadLength;
+            IOStatDuration duration;
+            FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
             retSize = pread(openInstance->physicalFd, readBuffer, readBufferSize, offset);
+            FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
             if (retSize != checkReadLength) {
                 int err = errno;
                 if (err == EAGAIN) {
+                    IOStatDuration duration;
+                    FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
                     retSize = pread(openInstance->physicalFd, readBuffer, checkReadLength, offset);
+                    FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
                     if (retSize != checkReadLength) {
                         err = errno;
                         FALCON_LOG(LOG_ERROR) << "In ReadFileLR(): pread fd = " << openInstance->physicalFd
@@ -934,11 +943,17 @@ int FalconStore::ReadSmallFiles(OpenInstance *openInstance)
             return -err;
         }
         FalconStats::GetInstance().stats[BLOCKCACHE_READ] += bufSize;
+        IOStatDuration duration;
+        FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
         ssize_t retSize = pread(localFd, readBuffer, bufSize, 0);
+        FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
         if (retSize != (ssize_t)bufSize) {
             int err = errno;
             if (err == EAGAIN) {
+                IOStatDuration duration;
+                FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
                 retSize = pread(localFd, readBuffer, bufSize, 0);
+                FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
                 if (retSize == (ssize_t)bufSize) {
                     close(localFd);
                     DiskCache::GetInstance().Unpin(inodeId);
@@ -1031,7 +1046,10 @@ int FalconStore::WriteToFileAsync(uint64_t inodeId, std::string &fileName, std::
     ThreadTask task;
     task.task = [fd, buf, bufSize, inodeId, lockerPtr]() {
         FalconStats::GetInstance().stats[BLOCKCACHE_WRITE] += bufSize;
+        IOStatDuration duration;
+        FalconStats::GetInstance().startIO(duration, IOStatsType::IO_WRITE);
         int retSize = pwrite(fd, buf.get(), bufSize, 0);
+        FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
         int err = errno;
         close(fd);
         if (retSize < 0) {
@@ -1077,11 +1095,17 @@ int FalconStore::ReadSmallFilesForBrpc(uint64_t inodeId,
             return -err;
         }
         FalconStats::GetInstance().stats[BLOCKCACHE_READ] += size;
+        IOStatDuration duration;
+        FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
         ssize_t retSize = pread(localFd, buf, size, 0);
+        FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
         if (retSize != (ssize_t)size) {
             int err = errno;
             if (err == EAGAIN) {
+                IOStatDuration duration;
+                FalconStats::GetInstance().startIO(duration, IOStatsType::IO_READ);
                 retSize = pread(localFd, buf, size, 0);
+                FalconStats::GetInstance().finishIO(duration, retSize >= 0, retSize);
                 if (retSize == (ssize_t)size) {
                     close(localFd);
                     DiskCache::GetInstance().Unpin(inodeId);

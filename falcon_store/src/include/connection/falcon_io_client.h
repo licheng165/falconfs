@@ -53,6 +53,7 @@ class FalconIOClient {
     int TruncateFile(uint64_t physicalFd, off_t size);
     int CheckConnection();
     int StatCluster(int nodeId, std::vector<size_t> &stats, bool scatter);
+    int ReportIORecords(int nodeId, int pid, const std::vector<IORecordForReport> &records);
 
   private:
     std::shared_ptr<brpc::Channel> channel;

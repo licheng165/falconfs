@@ -18,6 +18,7 @@
 #include "connection/node.h"
 #include "falcon_store/falcon_store.h"
 #include "log/logging.h"
+#include "stats/io_record_aggregator.h"
 #include "util/utils.h"
 
 namespace falcon::brpc_io
@@ -414,6 +415,33 @@ void RemoteIOServiceImpl::StatCluster(google::protobuf::RpcController *cntl_base
         response->add_stats(e);
     }
     response->set_error_code(ret);
+}
+
+void RemoteIOServiceImpl::ReportIORecords(google::protobuf::RpcController * /*cntl_base*/,
+                                          const ReportIORecordsRequest *request,
+                                          ReportIORecordsReply *response,
+                                          google::protobuf::Closure *done)
+{
+    brpc::ClosureGuard doneGuard(done);
+
+    int nodeId = request->node_id();
+    int pid = request->pid();
+
+    std::vector<IORecordForReport> records;
+    for (const auto &msg : request->records()) {
+        IORecordForReport r;
+        r.pid = msg.pid();
+        r.recordId = msg.record_id();
+        r.ioType = msg.io_type();
+        r.ioBytes = msg.io_bytes();
+        r.startTimeNs = msg.start_time_ns();
+        r.endTimeNs = msg.end_time_ns();
+        r.isInflight = msg.is_inflight();
+        records.push_back(r);
+    }
+
+    IORecordAggregator::GetInstance().receiveIORecords(nodeId, pid, records);
+    response->set_error_code(0);
 }
 
 int RemoteIOServer::Run()

@@ -379,3 +379,31 @@ int FalconIOClient::StatCluster(int nodeId, std::vector<size_t> &stats, bool sca
 
     return 0;
 }
+
+int FalconIOClient::ReportIORecords(int nodeId, int pid, const std::vector<IORecordForReport> &records)
+{
+    falcon::brpc_io::ReportIORecordsRequest request;
+    falcon::brpc_io::ReportIORecordsReply response;
+    brpc::Controller cntl;
+    cntl.set_timeout_ms(10000);
+
+    request.set_node_id(nodeId);
+    request.set_pid(pid);
+    for (const auto &r : records) {
+        auto *msg = request.add_records();
+        msg->set_pid(r.pid);
+        msg->set_record_id(r.recordId);
+        msg->set_io_type(r.ioType);
+        msg->set_io_bytes(r.ioBytes);
+        msg->set_start_time_ns(r.startTimeNs);
+        msg->set_end_time_ns(r.endTimeNs);
+        msg->set_is_inflight(r.isInflight);
+    }
+
+    stub->ReportIORecords(&cntl, &request, &response, nullptr);
+    if (cntl.Failed()) {
+        return -BrpcErrorCodeToFuseErrno(cntl.ErrorCode());
+    }
+
+    return response.error_code();
+}

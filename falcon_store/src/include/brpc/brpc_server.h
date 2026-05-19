@@ -74,6 +74,11 @@ class RemoteIOServiceImpl : public RemoteIOService {
                          const StatClusterRequest *request,
                          StatClusterReply *response,
                          google::protobuf::Closure *done) override;
+
+    void ReportIORecords(google::protobuf::RpcController *cntl_base,
+                         const ReportIORecordsRequest *request,
+                         ReportIORecordsReply *response,
+                         google::protobuf::Closure *done) override;
 };
 
 class RemoteIOServer {

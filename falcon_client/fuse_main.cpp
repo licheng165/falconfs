@@ -23,6 +23,7 @@
 #include "falcon_meta.h"
 #include "init/falcon_init.h"
 #include "stats/falcon_stats.h"
+#include "stats/io_record_aggregator.h"
 #include "connection/falcon_io_client.h"
 #include "buffer/dir_open_instance.h"
 #ifdef WITH_PROMETHEUS
@@ -494,6 +495,7 @@ int main(int argc, char *argv[])
     }
 
     int ret;
+    FalconModuleInit::SetIsFuseProcess();
     ret = GetInit().Init();
     if (ret != FALCON_SUCCESS) {
         std::cerr << "Falcon init failed" << std::endl;
@@ -531,6 +533,34 @@ int main(int argc, char *argv[])
     std::jthread statsThread = std::jthread([](std::stop_token stoken) { 
         FalconStats::GetInstance().storeStatforGet(stoken);
     });
+
+    /* Start IO record self-report and peak calculation threads (fuse process only) */
+    bool reportEnabled = config->GetBool(FalconPropertyKey::FALCON_IO_STATS_REPORT_TO_FUSE_ENABLE);
+    uint32_t printIntervalSec = config->GetUint32(FalconPropertyKey::FALCON_IO_STATS_RESULT_PRINT_INTERVAL_SEC);
+    bool startIOStatsThreads = reportEnabled && (printIntervalSec != 0);
+
+    std::jthread selfReportThread;
+    std::jthread peakCalcThread;
+    if (startIOStatsThreads) {
+        selfReportThread = std::jthread([](std::stop_token stoken) {
+            while (!stoken.stop_requested()) {
+                auto records = FalconStats::GetInstance().getRecordsForReport(static_cast<int>(getpid()));
+                IORecordAggregator::GetInstance().receiveIORecords(-1, static_cast<int>(getpid()), records);
+                FalconStats::GetInstance().cleanupReportedRecords(records);
+
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        });
+
+        peakCalcThread = std::jthread([printIntervalSec](std::stop_token stoken) {
+            while (!stoken.stop_requested()) {
+                IORecordAggregator::GetInstance().aggregateAndPrintPeak(IO_READ);
+                IORecordAggregator::GetInstance().aggregateAndPrintPeak(IO_WRITE);
+
+                std::this_thread::sleep_for(std::chrono::seconds(printIntervalSec));
+            }
+        });
+    }
 
 #ifdef WITH_PROMETHEUS
     /* Start prometheus monitor */

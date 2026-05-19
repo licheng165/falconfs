@@ -4,13 +4,22 @@
 
 #include "stats/falcon_stats.h"
 
+#include <algorithm>
 #include <condition_variable>
 #include <csignal>
 #include <fstream>
 #include <iomanip>
 #include <string>
+#include <unistd.h>
 
 #include "log/logging.h"
+
+IOStatDuration::~IOStatDuration()
+{
+    if (!finished && stats != nullptr) {
+        stats->cancelIO(*this);
+    }
+}
 
 void FalconStats::storeStatforGet(std::stop_token stoken)
 {
@@ -30,6 +39,143 @@ void FalconStats::storeStatforGet(std::stop_token stoken)
         }
         sleep(1);
     }
+}
+
+void FalconStats::startIO(IOStatDuration &duration, IOStatsType type)
+{
+    if (!isIOStatsEnabled()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(recordsMutex);
+
+    auto now = std::chrono::steady_clock::now();
+    duration.setDurationType(type);
+    duration.setStartTimeNs(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+    duration.setRecordId(nextRecordId.fetch_add(1, std::memory_order_relaxed));
+    duration.setStats(this);
+    inflightDurations.insert(&duration);
+}
+
+void FalconStats::finishIO(IOStatDuration &duration, bool success, size_t ioBytes)
+{
+    if (!isIOStatsEnabled()) {
+        return;
+    }
+
+    duration.markFinished();
+
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(recordsMutex);
+
+    inflightDurations.erase(&duration);
+
+    if (success) {
+        IORecord record;
+        record.recordId = duration.getRecordId();
+        record.ioBytes = ioBytes;
+        record.startTimeNs = duration.getStartTime();
+        record.endTimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+        if (duration.isRead()) {
+            readRecords.push_back(record);
+            if (readRecords.size() > MAX_IO_RECORDS) {
+                readRecords.erase(readRecords.begin());
+            }
+        } else {
+            writeRecords.push_back(record);
+            if (writeRecords.size() > MAX_IO_RECORDS) {
+                writeRecords.erase(writeRecords.begin());
+            }
+        }
+    }
+}
+
+void FalconStats::cancelIO(IOStatDuration &duration)
+{
+    std::lock_guard<std::mutex> lock(recordsMutex);
+    inflightDurations.erase(&duration);
+}
+
+std::vector<IORecordForReport> FalconStats::getRecordsForReport(int pid)
+{
+    if (!isIOStatsEnabled()) {
+        return {};
+    }
+
+    std::vector<IORecordForReport> reportRecords;
+    std::lock_guard<std::mutex> lock(recordsMutex);
+
+    for (auto *duration : inflightDurations) {
+        IORecordForReport r;
+        r.pid = pid;
+        r.recordId = duration->getRecordId();
+        r.ioType = static_cast<int>(duration->getType());
+        r.ioBytes = 0;
+        r.startTimeNs = duration->getStartTime();
+        r.endTimeNs = 0;
+        r.isInflight = true;
+        reportRecords.push_back(r);
+    }
+
+    for (auto &record : readRecords) {
+        IORecordForReport r;
+        r.pid = pid;
+        r.recordId = record.recordId;
+        r.ioType = static_cast<int>(IO_READ);
+        r.ioBytes = record.ioBytes;
+        r.startTimeNs = record.startTimeNs;
+        r.endTimeNs = record.endTimeNs;
+        r.isInflight = false;
+        reportRecords.push_back(r);
+    }
+
+    for (auto &record : writeRecords) {
+        IORecordForReport r;
+        r.pid = pid;
+        r.recordId = record.recordId;
+        r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = record.ioBytes;
+        r.startTimeNs = record.startTimeNs;
+        r.endTimeNs = record.endTimeNs;
+        r.isInflight = false;
+        reportRecords.push_back(r);
+    }
+
+    return reportRecords;
+}
+
+void FalconStats::cleanupReportedRecords(const std::vector<IORecordForReport> &reportedRecords)
+{
+    if (reportedRecords.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(recordsMutex);
+
+    std::unordered_set<size_t> reportedReadIds;
+    std::unordered_set<size_t> reportedWriteIds;
+
+    for (const auto &r : reportedRecords) {
+        if (r.isInflight) {
+            continue;
+        }
+        if (r.ioType == static_cast<int>(IO_READ)) {
+            reportedReadIds.insert(r.recordId);
+        } else if (r.ioType == static_cast<int>(IO_WRITE)) {
+            reportedWriteIds.insert(r.recordId);
+        }
+    }
+
+    readRecords.erase(std::remove_if(readRecords.begin(), readRecords.end(),
+                                     [&](const IORecord &record) {
+                                         return reportedReadIds.count(record.recordId) > 0;
+                                     }),
+                      readRecords.end());
+
+    writeRecords.erase(std::remove_if(writeRecords.begin(), writeRecords.end(),
+                                      [&](const IORecord &record) {
+                                          return reportedWriteIds.count(record.recordId) > 0;
+                                      }),
+                       writeRecords.end());
 }
 
 std::string formatU64(size_t size)

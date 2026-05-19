@@ -24,6 +24,8 @@
         "falcon_log_reserved_time": 1,
         "falcon_stat_max": true,
         "falcon_use_prometheus": true,
-        "falcon_prometheus_port": "50040"
+        "falcon_prometheus_port": "50040",
+        "falcon_io_stats_result_print_interval_sec": 1,
+        "falcon_io_stats_report_to_fuse_enable": true
     }
 }

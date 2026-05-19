@@ -16,6 +16,7 @@ service RemoteIOService {
     rpc TruncateFile(TruncateFileRequest) returns(ErrorCodeOnlyReply) {}
     rpc CheckConnection(CheckConnectionRequest) returns(ErrorCodeOnlyReply) {}
     rpc StatCluster(StatClusterRequest) returns(StatClusterReply) {}
+    rpc ReportIORecords(ReportIORecordsRequest) returns(ReportIORecordsReply) {}
 }
 
 message StatClusterRequest {
@@ -108,4 +109,24 @@ message TruncateOpenInstanceRequest {
 message TruncateFileRequest {
     fixed64 physical_fd = 1;
     fixed64 size = 2;
+}
+
+message IORecordMsg {
+    int32 pid = 1;
+    uint64 record_id = 2;
+    int32 io_type = 3;
+    uint64 io_bytes = 4;
+    uint64 start_time_ns = 5;
+    uint64 end_time_ns = 6;
+    bool is_inflight = 7;
+}
+
+message ReportIORecordsRequest {
+    int32 node_id = 1;
+    int32 pid = 2;
+    repeated IORecordMsg records = 3;
+}
+
+message ReportIORecordsReply {
+    int32 error_code = 1;
 }
