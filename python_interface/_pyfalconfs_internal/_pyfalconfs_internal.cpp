@@ -20,6 +20,22 @@
 #include "log/logging.h"
 #include "stats/falcon_stats.h"
 
+class PyGILReleaser {
+public:
+    PyGILReleaser() {
+        state = PyEval_SaveThread();
+    }
+    ~PyGILReleaser() {
+        PyEval_RestoreThread(state);
+    }
+    PyGILReleaser(const PyGILReleaser&) = delete;
+    PyGILReleaser(PyGILReleaser&&) = delete;
+    PyGILReleaser& operator=(const PyGILReleaser&) = delete;
+    PyGILReleaser& operator=(PyGILReleaser&&) = delete;
+private:
+    PyThreadState *state;
+};
+
 /* =================== Timing Helpers =======================*/
 static int64_t steady_clock_now_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -84,6 +100,7 @@ static PyObject* PyWrapper_Init(PyObject* self, PyObject* args)
     
     try
     {
+        PyGILReleaser gilReleaser;
         Init(workspace, runningConfigFile);
     }
     catch (const std::exception& e)
@@ -111,6 +128,7 @@ static PyObject* PyWrapper_Mkdir(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Mkdir(path);
     }
     catch (const std::exception& e)
@@ -139,6 +157,7 @@ static PyObject* PyWrapper_Rmdir(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Rmdir(path);
     }
     catch (const std::exception& e)
@@ -172,6 +191,7 @@ static PyObject* PyWrapper_Create(PyObject* self, PyObject* args)
     uint64_t fd;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Create(path, oflags, fd);
     }
     catch (const std::exception& e)
@@ -200,6 +220,7 @@ static PyObject* PyWrapper_Unlink(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Unlink(path);
     }
     catch (const std::exception& e)
@@ -231,6 +252,7 @@ static PyObject* PyWrapper_Open(PyObject* self, PyObject* args)
     uint64_t fd;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Open(path, oflags, fd);
     }
     catch (const std::exception& e)
@@ -259,6 +281,7 @@ static PyObject* PyWrapper_Flush(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Flush(path, fd);
     }
     catch (const std::exception& e)
@@ -288,6 +311,7 @@ static PyObject* PyWrapper_Close(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Close(path, fd);
     }
     catch (const std::exception& e)
@@ -325,6 +349,7 @@ static PyObject* PyWrapper_Read(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Read(path, fd, (char*)buffer.buf, size, offset);
     }
     catch (const std::exception& e)
@@ -366,6 +391,7 @@ static PyObject* PyWrapper_Write(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Write(path, fd, (char*)buffer.buf, size, offset);
     }
     catch (const std::exception& e)
@@ -416,6 +442,7 @@ static PyObject* PyWrapper_Stat(PyObject* self, PyObject* args)
     struct stat stbuf;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = Stat(path, &stbuf);
     }
     catch (const std::exception& e)
@@ -471,6 +498,7 @@ static PyObject* PyWrapper_OpenDir(PyObject* self, PyObject* args)
     uint64_t fd = 0;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = OpenDir(path, fd);
     }
     catch (const std::exception& e)
@@ -499,6 +527,7 @@ static PyObject* PyWrapper_CloseDir(PyObject* self, PyObject* args)
     int ret = -1;
     try
     {
+        PyGILReleaser gilReleaser;
         ret = CloseDir(path, fd);
     }
     catch (const std::exception& e)
@@ -539,7 +568,10 @@ static PyObject* PyWrapper_ReadDir(PyObject* self, PyObject* args)
     int offset = 0;
     while (true)
     {
-        ret = ReadDir(path, list, filler, offset, fd);
+        {
+            PyGILReleaser gilReleaser;
+            ret = ReadDir(path, list, filler, offset, fd);
+        }
         if (ret != 0)
             break;
         int newOffset = PyList_Size(list);
@@ -837,7 +869,7 @@ static PyObject* PyWrapper_AsyncGet(PyObject* self, PyObject* args)
         uint64_t fd = UINT64_MAX;
         try
         {
-            ret = Open(path, O_RDONLY, fd);
+            ret = Open(path, O_RDONLY | O_DIRECT, fd);
             if (ret != 0)
             {
                 state->cpp_done_time_us = steady_clock_now_us();
@@ -890,7 +922,7 @@ static PyObject* PyWrapper_AsyncPut(PyObject* self, PyObject* args)
         uint64_t fd = UINT64_MAX;
         try
         {
-            ret = Create(path, O_CREAT | O_WRONLY | O_TRUNC, fd);
+            ret = Create(path, O_CREAT | O_WRONLY | O_TRUNC | O_DIRECT, fd);
             if (ret != 0)
             {
                 state->cpp_done_time_us = steady_clock_now_us();
