@@ -311,6 +311,141 @@ TEST_F(IORecordAggregatorUT, ComputePeakThroughput_NumericalStability)
     EXPECT_DOUBLE_EQ(peak, expected);
 }
 
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_EmptyRecords)
+{
+    std::vector<IORecordForReport> records;
+    double throughput = aggregator.computeAdaptiveThroughput(records, 64, 2000000000);
+    EXPECT_DOUBLE_EQ(throughput, 0.0);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_MinSamplesNotMet)
+{
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < 5; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = 1000; r.startTimeNs = 0;
+        r.endTimeNs = (i + 1) * 1000000; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    double throughput = aggregator.computeAdaptiveThroughput(records, 10, 2000000000);
+    EXPECT_DOUBLE_EQ(throughput, 0.0);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_Basic)
+{
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < 100; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = 1000; r.startTimeNs = 0;
+        r.endTimeNs = (i + 1) * 1000000; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    uint32_t minSamples = 64;
+    double throughput = aggregator.computeAdaptiveThroughput(records, minSamples, 2000000000);
+
+    size_t firstIdx = records.size() - minSamples;
+    size_t totalBytes = 0;
+    for (size_t i = firstIdx; i < records.size(); i++) {
+        totalBytes += records[i].ioBytes;
+    }
+    double expected = static_cast<double>(totalBytes) /
+                      static_cast<double>(records.back().endTimeNs - records[firstIdx].endTimeNs);
+    EXPECT_DOUBLE_EQ(throughput, expected);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_SparseRecordsHitCap)
+{
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < 100; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = 1000; r.startTimeNs = 0;
+        r.endTimeNs = (i + 1) * 100000000ULL; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    size_t maxWindowNs = 2000000000;
+    double throughput = aggregator.computeAdaptiveThroughput(records, 64, maxWindowNs);
+
+    size_t cutoff = records.back().endTimeNs > maxWindowNs ? (records.back().endTimeNs - maxWindowNs) : 0;
+    size_t totalBytes = 0;
+    for (const auto &r : records) {
+        if (r.endTimeNs >= cutoff) {
+            totalBytes += r.ioBytes;
+        }
+    }
+    double expected = static_cast<double>(totalBytes) / static_cast<double>(maxWindowNs);
+    EXPECT_DOUBLE_EQ(throughput, expected);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_DenseBurst)
+{
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < 200; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = 4096; r.startTimeNs = i * 5000;
+        r.endTimeNs = i * 5000 + 10000; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    uint32_t minSamples = 64;
+    double throughput = aggregator.computeAdaptiveThroughput(records, minSamples, 2000000000);
+
+    size_t firstIdx = records.size() - minSamples;
+    size_t timeSpan = records.back().endTimeNs - records[firstIdx].endTimeNs;
+    double expected = static_cast<double>(minSamples * 4096) / static_cast<double>(timeSpan);
+    EXPECT_DOUBLE_EQ(throughput, expected);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_IdenticalEndTime)
+{
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < 100; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = 1000; r.startTimeNs = 0;
+        r.endTimeNs = 1000000; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    double throughput = aggregator.computeAdaptiveThroughput(records, 64, 2000000000);
+    EXPECT_DOUBLE_EQ(throughput, 0.0);
+}
+
+TEST_F(IORecordAggregatorUT, ComputeAdaptiveThroughput_ConcurrentAccuracy)
+{
+    const size_t concurrentCount = 136;
+    const size_t bytesPerIO = 1048576;
+
+    std::vector<IORecordForReport> records;
+    for (size_t i = 0; i < concurrentCount; i++) {
+        IORecordForReport r;
+        r.pid = 1; r.recordId = i; r.ioType = static_cast<int>(IO_WRITE);
+        r.ioBytes = bytesPerIO; r.startTimeNs = 0;
+        r.endTimeNs = (i + 1) * 1000000; r.isInflight = false;
+        records.push_back(r);
+    }
+
+    uint32_t minSamples = 64;
+    size_t maxWindowNs = 2000000000;
+
+    double adaptive = aggregator.computeAdaptiveThroughput(records, minSamples, maxWindowNs);
+
+    double sweepLine = aggregator.computePeakThroughput(records);
+
+    double actualDiskThroughput = static_cast<double>(concurrentCount * bytesPerIO) /
+                                  static_cast<double>(records.back().endTimeNs - records.front().startTimeNs);
+
+    EXPECT_NEAR(adaptive, actualDiskThroughput, actualDiskThroughput * 0.1);
+
+    EXPECT_GT(sweepLine, adaptive * 2.0);
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);

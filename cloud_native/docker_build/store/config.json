@@ -29,6 +29,10 @@
     "falcon_use_prometheus": true,
     "falcon_prometheus_port": "50040",
     "falcon_io_stats_result_print_interval_sec": 1,
-    "falcon_io_stats_report_to_fuse_enable": true
+    "falcon_io_stats_report_to_fuse_enable": true,
+    "falcon_io_stats_use_adaptive_window": false,
+    "falcon_io_stats_adaptive_min_samples": 64,
+    "falcon_io_stats_adaptive_max_window_sec": 2,
+    "falcon_io_stats_adaptive_lookback_sec": 5
   }
 }

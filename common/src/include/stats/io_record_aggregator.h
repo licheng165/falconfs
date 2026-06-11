@@ -37,6 +37,14 @@ class IORecordAggregator {
 
     double computePeakThroughput(std::vector<IORecordForReport> &records);
 
+    double computeAdaptiveThroughput(const std::vector<IORecordForReport> &records,
+                                     uint32_t minSamples, size_t maxWindowNs);
+
+    void setUseAdaptiveWindow(bool enabled) { useAdaptiveWindow_ = enabled; }
+    void setAdaptiveMinSamples(uint32_t minSamples) { adaptiveMinSamples_ = minSamples; }
+    void setAdaptiveMaxWindowNs(size_t maxWindowNs) { adaptiveMaxWindowNs_ = maxWindowNs; }
+    void setAdaptiveLookbackNs(size_t lookbackNs) { adaptiveLookbackNs_ = lookbackNs; }
+
   private:
     IORecordAggregator() = default;
 
@@ -57,4 +65,9 @@ class IORecordAggregator {
     std::mutex mutex_;
     RecordMap readRecords_;
     RecordMap writeRecords_;
+
+    bool useAdaptiveWindow_ = false;
+    uint32_t adaptiveMinSamples_ = 64;
+    size_t adaptiveMaxWindowNs_ = 2000000000;
+    size_t adaptiveLookbackNs_ = 5000000000;
 };

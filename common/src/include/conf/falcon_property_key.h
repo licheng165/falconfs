@@ -87,4 +87,16 @@ class FalconPropertyKey : public PropertyKey {
 
     inline static const auto FALCON_IO_STATS_REPORT_TO_FUSE_ENABLE =
         PropertyKey::Builder("main", "falcon_io_stats_report_to_fuse_enable", FALCON, FALCON_BOOL).build();
+
+    inline static const auto FALCON_IO_STATS_USE_ADAPTIVE_WINDOW =
+        PropertyKey::Builder("main", "falcon_io_stats_use_adaptive_window", FALCON, FALCON_BOOL).build();
+
+    inline static const auto FALCON_IO_STATS_ADAPTIVE_MIN_SAMPLES =
+        PropertyKey::Builder("main", "falcon_io_stats_adaptive_min_samples", FALCON, FALCON_UINT).build();
+
+    inline static const auto FALCON_IO_STATS_ADAPTIVE_MAX_WINDOW_SEC =
+        PropertyKey::Builder("main", "falcon_io_stats_adaptive_max_window_sec", FALCON, FALCON_UINT).build();
+
+    inline static const auto FALCON_IO_STATS_ADAPTIVE_LOOKBACK_SEC =
+        PropertyKey::Builder("main", "falcon_io_stats_adaptive_lookback_sec", FALCON, FALCON_UINT).build();
 };

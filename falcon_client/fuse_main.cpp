@@ -542,6 +542,19 @@ int main(int argc, char *argv[])
     std::jthread selfReportThread;
     std::jthread peakCalcThread;
     if (startIOStatsThreads) {
+        bool useAdaptive = config->GetBool(FalconPropertyKey::FALCON_IO_STATS_USE_ADAPTIVE_WINDOW);
+        auto &agg = IORecordAggregator::GetInstance();
+        agg.setUseAdaptiveWindow(useAdaptive);
+        if (useAdaptive) {
+            agg.setAdaptiveMinSamples(
+                config->GetUint32(FalconPropertyKey::FALCON_IO_STATS_ADAPTIVE_MIN_SAMPLES));
+            agg.setAdaptiveMaxWindowNs(
+                static_cast<size_t>(config->GetUint32(
+                    FalconPropertyKey::FALCON_IO_STATS_ADAPTIVE_MAX_WINDOW_SEC)) * 1000000000ULL);
+            agg.setAdaptiveLookbackNs(
+                static_cast<size_t>(config->GetUint32(
+                    FalconPropertyKey::FALCON_IO_STATS_ADAPTIVE_LOOKBACK_SEC)) * 1000000000ULL);
+        }
         selfReportThread = std::jthread([](std::stop_token stoken) {
             while (!stoken.stop_requested()) {
                 auto records = FalconStats::GetInstance().getRecordsForReport(static_cast<int>(getpid()));

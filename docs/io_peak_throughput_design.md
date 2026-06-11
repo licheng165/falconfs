@@ -236,6 +236,10 @@ message ReportIORecordsReply {
 |--------|------|--------|------|
 | `falcon_io_stats_report_to_fuse_enable` | bool | true | 是否启用 IO 统计记录 |
 | `falcon_io_stats_result_print_interval_sec` | uint | 1 | 峰值计算/打印周期（秒） |
+| `falcon_io_stats_use_adaptive_window` | bool | false | 是否使用自适应窗口算法（替代 sweep-line） |
+| `falcon_io_stats_adaptive_min_samples` | uint | 64 | 自适应窗口最少样本数 |
+| `falcon_io_stats_adaptive_max_window_sec` | uint | 2 | 自适应窗口时间上界（秒） |
+| `falcon_io_stats_adaptive_lookback_sec` | uint | 5 | 数据回溯范围（秒） |
 
 ---
 
@@ -274,7 +278,61 @@ message ReportIORecordsReply {
 
 ---
 
-## 8. IO 埋点清单
+## 8. 自适应窗口算法（Adaptive Window）
+
+### 8.1 背景
+
+Sweep-line 算法使用时间比例分摊（`bytes × segLen / totalDuration`），假设每个 IO 在其持续时间内以恒定速率传输数据。但在高并发 O_DIRECT 场景下，该假设不成立：
+
+- Linux 块层将并发 `pwrite()` 在设备层面串行化
+- `pwrite()` 的 wall-clock 持续时间包含大量队列等待时间
+- 比例分摊在早期时间段内将多个 IO 的字节虚增叠加，导致吞吐峰值被高估（实测可达 5x）
+
+### 8.2 算法原理
+
+自适应窗口算法基于**样本数驱动的滑动窗口**，与 fio 的计算方式一致：
+
+```
+throughput = Σ(最近 N 个已完成 IO 的字节数) / (最新完成时刻 - 第 N 个完成时刻)
+```
+
+- **突发密集时**：N 个 IO 在短时间内完成 → 窗口自动缩短 → 精准捕获峰值
+- **稀疏流量时**：N 个 IO 跨越较长时间 → 窗口自动拉长 → 平滑输出
+- **窗口上界**：当时间跨度超过 `maxWindowSec` 时截断，避免空闲期窗口过长
+- **无比例分摊**：直接使用总字节数/时间跨度，不假设均匀传输
+
+### 8.3 实现
+
+```
+computeAdaptiveThroughput(records, minSamples, maxWindowNs):
+  1. if records.size() < minSamples → return 0.0
+  2. firstIdx = records.size() - minSamples
+  3. totalBytes = Σ records[firstIdx..].ioBytes
+  4. timeSpan = records.back().endTimeNs - records[firstIdx].endTimeNs
+  5. if timeSpan > maxWindowNs:
+       timeSpan = maxWindowNs
+       回退 firstIdx 到 cutoff = windowEnd - maxWindowNs
+       重新计算 totalBytes
+  6. return totalBytes / timeSpan
+```
+
+### 8.4 与 Sweep-Line 的对比
+
+| 维度 | Sweep-Line | Adaptive Window |
+|------|-----------|----------------|
+| 计算方式 | 比例分摊 | 直接 Σbytes / timeSpan |
+| 窗口定义 | 相邻事件间 | 最近 N 个 IO 的时间跨度 |
+| 并发场景准确性 | 高估（~ln(N) 倍） | 准确 |
+| fio 一致性 | 不一致 | 一致 |
+| 最大时间复杂度 | O(N log N) | O(N log N)（排序） |
+
+### 8.5 配置切换
+
+通过 `falcon_io_stats_use_adaptive_window` 开关控制，设为 `true` 使用自适应算法，`false` 使用原有 sweep-line 算法（默认）。运行时不可热切换，需重启生效。
+
+---
+
+## 9. IO 埋点清单
 
 | 文件 | 函数 | IO 类型 |
 |------|------|---------|

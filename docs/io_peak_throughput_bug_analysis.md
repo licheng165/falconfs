@@ -89,7 +89,39 @@ for (const auto &kv : typeRecords) {
 FALCON_LOG(LOG_ERROR) << "instantaneous " << typeName << " throughput peak(bytes/ns): " << peak ...;
 ```
 
-峰值为正常业务信息，应为 `FALCON_LOG(LOG_INFO)`。
+峰值为正常业务信息，应为 `FALCON_LOG(LOG_INFO)`。（已修复）
+
+---
+
+## 🔴 Major: sweep-line 比例分摊导致高并发场景吞吐峰值被高估
+
+### 问题描述
+
+sweep-line 算法在 `computePeakThroughput()` 中使用时间比例分摊：
+
+```
+contribution = bytes × segLen / totalDuration
+throughput = Σ contribution / Δt
+```
+
+这隐含假设每个 IO 在其 wall-clock 持续时间内以恒定速率传输数据。但在高并发 O_DIRECT 场景下：
+
+1. Linux 块层将并发 `pwrite()` 在设备层面串行化
+2. `pwrite()` 的 wall-clock 时间包含大量队列等待，而非实际传输时间
+3. 并发 IO 数量为 N 时，比例分摊的峰值 ≈ `ln(N) × 实际磁盘吞吐`
+
+实测场景（8 进程 × 17 并发 = 136 IO），计算出的吞吐峰值约为 fio 实测磁盘吞吐的 5 倍，与 `ln(136) ≈ 4.9` 吻合。
+
+### 修复方案
+
+新增**自适应窗口算法** (`computeAdaptiveThroughput`)，通过 `falcon_io_stats_use_adaptive_window` 开关启用：
+
+- 计算方式：`Σ(最近 N 个 IO 字节数) / (时间跨度)`，不做比例分摊
+- 窗口随突发密度自动缩放（由 `falcon_io_stats_adaptive_min_samples` 控制样本数）
+- 时间上界由 `falcon_io_stats_adaptive_max_window_sec` 控制
+- 与 fio 的 `总字节/时间窗口` 计算方式一致
+
+详见 `docs/io_peak_throughput_design.md` 第 8 节。
 
 ---
 
@@ -98,11 +130,10 @@ FALCON_LOG(LOG_ERROR) << "instantaneous " << typeName << " throughput peak(bytes
 | 维度 | 评估 |
 |------|------|
 | **架构正确性** | ✅ Store → brpc RPC → FUSE brpc server → IORecordAggregator → peakCalcThread |
-| **功能可用性** | ✅ 可正确采集 IO 记录并计算瞬时峰值吞吐量 |
+| **功能可用性** | ✅ 可正确采集 IO 记录 |
 | **增量上报** | ✅ `cleanupReportedRecords` 确保每次只上报新增记录 |
-| **算法正确性** | ✅ sweep-line 算法实现正确 |
+| **sweep-line 算法** | ⚠️ 实现正确，但在高并发场景下比例分摊导致吞吐高估（已通过自适应算法修复） |
+| **自适应算法** | ✅ 基于样本数滑动窗口，与 fio 一致，已上线 |
 | **线程安全** | ✅ mutex 保护适当 |
-| **资源清理** | ✅ inflight 10s 超时清理、completed 记录按 checkpoint 清理、Store 端 MAX_IO_RECORDS 上限 |
+| **资源清理** | ✅ inflight 10s 超时清理、completed 记录按 checkpoint/lookback 清理、Store 端 MAX_IO_RECORDS 上限 |
 | **高 IOPS 场景** | ✅ 增量上报避免全量拷贝，性能与 IO 速率成正比 |
-
-**结论**：该实现架构正确、算法正确、线程安全，能够正确且合理地达成"统计 IO 瞬时峰值吞吐量"的目的。无功能性 bug。上述 Minor 问题属于防御性编程和代码质量改进建议。
